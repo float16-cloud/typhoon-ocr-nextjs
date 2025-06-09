@@ -2,64 +2,93 @@
 
 import { useState } from "react"
 import { useDropzone } from "react-dropzone"
-import { Upload, FileType, AlertCircle, FileText, CheckCircle } from "lucide-react"
+import { Upload, FileType, AlertCircle, FileText, CheckCircle, Clock, XCircle, Eye, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { MarkdownDisplay } from "@/components/markdown-display"
+import { Progress } from "@/components/ui/progress"
 import { cn } from "@/lib/utils"
 import type { PageOcrResponse } from "@/app/api/ocr/route"
 
 const PATH_OCR = "/api/ocr"
 
+interface FileItem {
+  id: string
+  file: File
+  status: 'pending' | 'processing' | 'completed' | 'error'
+  progress: number
+  result?: PageOcrResponse[]
+  error?: string
+  processingStatus?: string
+}
+
 export function FileUploader() {
-  const [file, setFile] = useState<File | null>(null)
-  const [isProcessing, setIsProcessing] = useState(false)
+  const [files, setFiles] = useState<FileItem[]>([])
+  const [selectedFileId, setSelectedFileId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [ocrResults, setOcrResults] = useState<PageOcrResponse[] | null>(null)
-  const [processingStatus, setProcessingStatus] = useState<string>("")
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: {
       "application/pdf": [".pdf"],
     },
-    maxFiles: 1,
     onDrop: (acceptedFiles) => {
-      if (acceptedFiles.length > 0) {
-        setFile(acceptedFiles[0])
-        setError(null)
-        setOcrResults(null)
-        setProcessingStatus("")
-      }
+      const newFiles = acceptedFiles.map(file => ({
+        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+        file,
+        status: 'pending' as const,
+        progress: 0
+      }))
+      
+      setFiles(prev => [...prev, ...newFiles])
+      setError(null)
+      
+      // Start processing each file after state update
+      setTimeout(() => {
+        newFiles.forEach(fileItem => {
+          processFile(fileItem.id, fileItem.file)
+        })
+      }, 100)
     },
     onDropRejected: () => {
-      setError("Please upload a PDF file only.")
+      setError("Please upload PDF files only.")
     },
   })
 
-  const handleUpload = async () => {
-    if (!file) return
+  const processFile = async (fileId: string, file: File) => {
+    console.log(`Starting processing for file: ${file.name} (ID: ${fileId})`)
+    
+    const updateFileStatus = (updates: Partial<FileItem>) => {
+      setFiles(prev => prev.map(f => 
+        f.id === fileId ? { ...f, ...updates } : f
+      ))
+    }
 
     try {
-      setIsProcessing(true)
-      setError(null)
-      setProcessingStatus("Converting file to base64...")
+      console.log("Step 1: Setting processing status")
+      updateFileStatus({ status: 'processing', progress: 10, processingStatus: "Converting file to base64..." })
 
+      console.log("Step 2: Converting file to base64")
       // Convert file to base64
       const base64 = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader()
         reader.onload = () => {
           const result = reader.result as string
-          // Remove the data URL prefix (e.g., "data:application/pdf;base64,")
           const base64Data = result.split(",")[1]
+          console.log("Base64 conversion completed")
           resolve(base64Data)
         }
-        reader.onerror = reject
+        reader.onerror = (error) => {
+          console.error("FileReader error:", error)
+          reject(error)
+        }
         reader.readAsDataURL(file)
       })
 
-      setProcessingStatus("Processing with OCR API...")
+      console.log("Step 3: Updating progress")
+      updateFileStatus({ progress: 30, processingStatus: "Processing with OCR API..." })
 
+      console.log("Step 4: Sending to OCR API")
       // Send file data to OCR API
       const response = await fetch(PATH_OCR, {
         method: "POST",
@@ -67,109 +96,113 @@ export function FileUploader() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          // fileName: file.name,
-          // fileType: file.type,
-          // fileSize: file.size,
+          fileName: file.name,
+          fileType: file.type,
+          fileSize: file.size,
           base64Data: base64,
         }),
       })
 
+      console.log("OCR API response status:", response.status)
+      
       if (!response.ok) {
-        throw new Error("OCR processing failed")
+        const errorText = await response.text()
+        console.error("OCR API error:", errorText)
+        throw new Error(`OCR processing failed: ${response.status} ${response.statusText}`)
       }
 
-      const { pages, total_pages } = await response.json()
-      setProcessingStatus(`Successfully processed ${total_pages} pages!`)
+      console.log("Step 5: Parsing response")
+      updateFileStatus({ progress: 80, processingStatus: "Finalizing results..." })
+
+      const responseData = await response.json()
+      console.log("OCR API response data:", responseData)
       
-      // Small delay to show success message
-      setTimeout(() => {
-        setOcrResults(pages)
-        setIsProcessing(false)
-        setProcessingStatus("")
-      }, 1000)
+      const { pages, total_pages } = responseData
+      
+      console.log("Step 6: Completing processing")
+      updateFileStatus({ 
+        status: 'completed', 
+        progress: 100, 
+        result: pages,
+        processingStatus: `Successfully processed ${total_pages} pages!`
+      })
 
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An unknown error occurred")
-      setIsProcessing(false)
-      setProcessingStatus("")
+      console.error("Error in processFile:", err)
+      updateFileStatus({ 
+        status: 'error', 
+        progress: 0,
+        error: err instanceof Error ? err.message : "An unknown error occurred"
+      })
     }
   }
 
-  const handleReset = () => {
-    setFile(null)
-    setOcrResults(null)
-    setError(null)
-    setProcessingStatus("")
+  const removeFile = (fileId: string) => {
+    setFiles(prev => prev.filter(f => f.id !== fileId))
+    if (selectedFileId === fileId) {
+      setSelectedFileId(null)
+    }
   }
 
-  const getFileIcon = () => {
-    if (!file) return null
-    return <FileType className="h-6 w-6 text-primary" />
+  const getStatusIcon = (status: FileItem['status']) => {
+    switch (status) {
+      case 'pending':
+        return <Clock className="h-4 w-4 text-yellow-500" />
+      case 'processing':
+        return <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
+      case 'completed':
+        return <CheckCircle className="h-4 w-4 text-green-500" />
+      case 'error':
+        return <XCircle className="h-4 w-4 text-red-500" />
+    }
   }
+
+  const selectedFile = files.find(f => f.id === selectedFileId)
 
   return (
     <div className="space-y-6">
-      {!ocrResults && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Upload className="h-5 w-5" />
-              Upload Document
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div
-              {...getRootProps()}
-              className={cn(
-                "border-2 border-dashed rounded-lg p-10 text-center cursor-pointer transition-colors",
-                isDragActive ? "border-primary bg-muted" : "border-muted-foreground/25 hover:border-primary/50",
-              )}
-            >
-              <input {...getInputProps()} />
-              <div className="flex flex-col items-center justify-center space-y-4">
-                <Upload className="h-10 w-10 text-muted-foreground" />
-                <div className="space-y-2">
-                  <p className="text-lg font-medium">
-                    {isDragActive ? "Drop the file here" : "Drag & drop a file here"}
-                  </p>
-                  <p className="text-sm text-muted-foreground">Supports PDF files only</p>
-                </div>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    const input = document.querySelector('input[type="file"]')
-                    if (input) (input as HTMLInputElement).click()
-                  }}
-                >
-                  Select File
-                </Button>
-              </div>
-            </div>
-
-            {file && (
-              <div className="mt-4 p-4 border rounded-md flex items-center justify-between bg-muted/50">
-                <div className="flex items-center space-x-3">
-                  {getFileIcon()}
-                  <div>
-                    <p className="font-medium">{file.name}</p>
-                    <p className="text-sm text-muted-foreground">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
-                  </div>
-                </div>
-                <div className="flex space-x-2">
-                  <Button variant="outline" size="sm" onClick={handleReset} disabled={isProcessing}>
-                    Remove
-                  </Button>
-                  <Button size="sm" onClick={handleUpload} disabled={isProcessing}>
-                    {isProcessing ? "Processing..." : "Process"}
-                  </Button>
-                </div>
-              </div>
+      {/* Upload Area */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Upload className="h-5 w-5" />
+            Upload Documents
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div
+            {...getRootProps()}
+            className={cn(
+              "border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors",
+              isDragActive ? "border-primary bg-muted" : "border-muted-foreground/25 hover:border-primary/50",
             )}
-          </CardContent>
-        </Card>
-      )}
+          >
+            <input {...getInputProps()} />
+            <div className="flex flex-col items-center justify-center space-y-4">
+              <Upload className="h-8 w-8 text-muted-foreground" />
+              <div className="space-y-2">
+                <p className="text-lg font-medium">
+                  {isDragActive ? "Drop the files here" : "Drag & drop PDF files here"}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  You can upload multiple PDF files at once
+                </p>
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  const input = document.querySelector('input[type="file"]')
+                  if (input) (input as HTMLInputElement).click()
+                }}
+              >
+                Select Files
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {error && (
         <Alert variant="destructive">
@@ -178,45 +211,111 @@ export function FileUploader() {
         </Alert>
       )}
 
-      {isProcessing && (
+      {/* Files List */}
+      {files.length > 0 && (
         <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center justify-center space-x-3 py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-              <div className="text-center">
-                <p className="text-lg font-medium">Processing document with OCR...</p>
-                {processingStatus && (
-                  <p className="text-sm text-muted-foreground mt-1">{processingStatus}</p>
-                )}
-              </div>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              Processing Queue ({files.length} files)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {files.map((fileItem) => (
+                <div
+                  key={fileItem.id}
+                  className={cn(
+                    "p-4 border rounded-lg transition-colors",
+                    selectedFileId === fileItem.id ? "border-primary bg-muted/50" : "border-muted-foreground/20"
+                  )}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3 flex-1">
+                      <FileType className="h-5 w-5 text-primary" />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium truncate">{fileItem.file.name}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {(fileItem.file.size / 1024 / 1024).toFixed(2)} MB
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {getStatusIcon(fileItem.status)}
+                        <span className="text-sm capitalize">{fileItem.status}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 ml-4">
+                      {fileItem.status === 'completed' && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setSelectedFileId(fileItem.id)}
+                        >
+                          <Eye className="h-4 w-4 mr-1" />
+                          View
+                        </Button>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => removeFile(fileItem.id)}
+                        className="text-red-500 hover:text-red-700"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  
+                  {fileItem.status === 'processing' && (
+                    <div className="mt-3 space-y-2">
+                      <Progress value={fileItem.progress} className="h-2" />
+                      {fileItem.processingStatus && (
+                        <p className="text-xs text-muted-foreground">{fileItem.processingStatus}</p>
+                      )}
+                    </div>
+                  )}
+                  
+                  {fileItem.status === 'error' && fileItem.error && (
+                    <div className="mt-2">
+                      <Alert variant="destructive">
+                        <AlertCircle className="h-4 w-4" />
+                        <AlertDescription className="text-sm">{fileItem.error}</AlertDescription>
+                      </Alert>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           </CardContent>
         </Card>
       )}
 
-      {ocrResults && (
-        <div className="space-y-6">
+      {/* Results Display */}
+      {selectedFile && selectedFile.status === 'completed' && selectedFile.result && (
+        <div className="space-y-4">
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-2">
               <CheckCircle className="h-5 w-5 text-green-500" />
-              <h2 className="text-xl font-semibold">Extracted Text ({ocrResults.length} pages)</h2>
+              <h2 className="text-xl font-semibold">
+                {selectedFile.file.name} - {selectedFile.result.length} pages
+              </h2>
             </div>
-            <Button variant="outline" onClick={handleReset}>
-              Process Another Document
+            <Button variant="outline" onClick={() => setSelectedFileId(null)}>
+              Close
             </Button>
           </div>
           
           <div className="space-y-4">
-            {ocrResults.map((pageResult) => (
+            {selectedFile.result.map((pageResult) => (
               <Card key={pageResult.page}>
                 <CardHeader className="pb-3">
                   <CardTitle className="flex items-center gap-2 text-lg">
                     <FileText className="h-4 w-4" />
-                    Page {pageResult.page}
+                    หน้า {pageResult.page}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <MarkdownDisplay markdown={pageResult.natural_text} />
+                  <MarkdownDisplay markdown={pageResult.natural_text.replace(/\\n/g, '\n')} />
                 </CardContent>
               </Card>
             ))}

@@ -54,11 +54,12 @@ async function processPageOcr(base64Page: string, pageNumber: number): Promise<P
     );
  
     const raw = (response.data as string)
+    console.log(raw)
 
     function extractText(jsonString: string) {
       const start = '{"natural_text": "';
       const end = '"}';
-      const cleaned = jsonString.trim();
+      const cleaned = jsonString
       
       if (cleaned.startsWith(start)) {
         const lastEnd = cleaned.lastIndexOf(end);
