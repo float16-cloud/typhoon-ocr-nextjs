@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { MarkdownDisplay } from "@/components/markdown-display"
-import { Progress } from "@/components/ui/progress"
 import { cn } from "@/lib/utils"
 import type { PageOcrResponse } from "@/app/api/ocr/route"
 
@@ -17,7 +16,6 @@ interface FileItem {
   id: string
   file: File
   status: 'pending' | 'processing' | 'completed' | 'error'
-  progress: number
   result?: PageOcrResponse[]
   error?: string
   processingStatus?: string
@@ -37,7 +35,6 @@ export function FileUploader() {
         id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
         file,
         status: 'pending' as const,
-        progress: 0
       }))
       
       setFiles(prev => [...prev, ...newFiles])
@@ -66,7 +63,7 @@ export function FileUploader() {
 
     try {
       console.log("Step 1: Setting processing status")
-      updateFileStatus({ status: 'processing', progress: 10, processingStatus: "Converting file to base64..." })
+      updateFileStatus({ status: 'processing', processingStatus: "Converting file to base64..." })
 
       console.log("Step 2: Converting file to base64")
       // Convert file to base64
@@ -86,7 +83,7 @@ export function FileUploader() {
       })
 
       console.log("Step 3: Updating progress")
-      updateFileStatus({ progress: 30, processingStatus: "Processing with OCR API..." })
+      updateFileStatus({ processingStatus: "Processing with OCR API..." })
 
       console.log("Step 4: Sending to OCR API")
       // Send file data to OCR API
@@ -112,7 +109,7 @@ export function FileUploader() {
       }
 
       console.log("Step 5: Parsing response")
-      updateFileStatus({ progress: 80, processingStatus: "Finalizing results..." })
+      updateFileStatus({ processingStatus: "Finalizing results..." })
 
       const responseData = await response.json()
       console.log("OCR API response data:", responseData)
@@ -122,7 +119,6 @@ export function FileUploader() {
       console.log("Step 6: Completing processing")
       updateFileStatus({ 
         status: 'completed', 
-        progress: 100, 
         result: pages,
         processingStatus: `Successfully processed ${total_pages} pages!`
       })
@@ -131,7 +127,6 @@ export function FileUploader() {
       console.error("Error in processFile:", err)
       updateFileStatus({ 
         status: 'error', 
-        progress: 0,
         error: err instanceof Error ? err.message : "An unknown error occurred"
       })
     }
@@ -267,10 +262,9 @@ export function FileUploader() {
                   </div>
                   
                   {fileItem.status === 'processing' && (
-                    <div className="mt-3 space-y-2">
-                      <Progress value={fileItem.progress} className="h-2" />
+                    <div className="mt-3">
                       {fileItem.processingStatus && (
-                        <p className="text-xs text-muted-foreground">{fileItem.processingStatus}</p>
+                        <p className="text-sm text-muted-foreground">{fileItem.processingStatus}</p>
                       )}
                     </div>
                   )}
