@@ -1,48 +1,36 @@
 "use client"
 
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 import { useDropzone } from "react-dropzone"
+import axios from "axios"
 import { Upload, FileType, AlertCircle, FileText, CheckCircle, Clock, XCircle, Eye, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { MarkdownDisplay } from "@/components/markdown-display"
 import { cn } from "@/lib/utils"
+import { useFilesStore, type FileItem } from "@/lib/store/files-store"
 import type { PageOcrResponse } from "@/app/api/ocr/route"
 
 const PATH_OCR = "/api/ocr"
 
-interface FileItem {
-  id: string
-  file: File
-  status: 'pending' | 'processing' | 'completed' | 'error'
-  result?: PageOcrResponse[]
-  error?: string
-  processingStatus?: string
-}
-
 export function FileUploader() {
-  const [files, setFiles] = useState<FileItem[]>([])
-  const [selectedFileId, setSelectedFileId] = useState<string | null>(null)
+  const router = useRouter()
   const [error, setError] = useState<string | null>(null)
+  
+  const { files, addFiles, updateFileStatus, removeFile } = useFilesStore()
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: {
       "application/pdf": [".pdf"],
     },
     onDrop: (acceptedFiles) => {
-      const newFiles = acceptedFiles.map(file => ({
-        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-        file,
-        status: 'pending' as const,
-      }))
-      
-      setFiles(prev => [...prev, ...newFiles])
+      const newFileItems = addFiles(acceptedFiles)
       setError(null)
       
       // Start processing each file after state update
       setTimeout(() => {
-        newFiles.forEach(fileItem => {
+        newFileItems.forEach(fileItem => {
           processFile(fileItem.id, fileItem.file)
         })
       }, 100)
@@ -54,16 +42,10 @@ export function FileUploader() {
 
   const processFile = async (fileId: string, file: File) => {
     console.log(`Starting processing for file: ${file.name} (ID: ${fileId})`)
-    
-    const updateFileStatus = (updates: Partial<FileItem>) => {
-      setFiles(prev => prev.map(f => 
-        f.id === fileId ? { ...f, ...updates } : f
-      ))
-    }
 
     try {
       console.log("Step 1: Setting processing status")
-      updateFileStatus({ status: 'processing', processingStatus: "Converting file to base64..." })
+      updateFileStatus(fileId, { status: 'processing', processingStatus: "Converting file to base64..." })
 
       console.log("Step 2: Converting file to base64")
       // Convert file to base64
@@ -83,41 +65,29 @@ export function FileUploader() {
       })
 
       console.log("Step 3: Updating progress")
-      updateFileStatus({ processingStatus: "Processing with OCR API..." })
+      updateFileStatus(fileId, { processingStatus: "Processing with OCR API..." })
 
       console.log("Step 4: Sending to OCR API")
       // Send file data to OCR API
-      const response = await fetch(PATH_OCR, {
-        method: "POST",
+      const response = await axios.post(PATH_OCR, {
+        base64Data: base64,
+      }, {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          fileName: file.name,
-          fileType: file.type,
-          fileSize: file.size,
-          base64Data: base64,
-        }),
       })
 
       console.log("OCR API response status:", response.status)
       
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error("OCR API error:", errorText)
-        throw new Error(`OCR processing failed: ${response.status} ${response.statusText}`)
-      }
-
       console.log("Step 5: Parsing response")
-      updateFileStatus({ processingStatus: "Finalizing results..." })
+      updateFileStatus(fileId, { processingStatus: "Finalizing results..." })
 
-      const responseData = await response.json()
-      console.log("OCR API response data:", responseData)
+      console.log("OCR API response data:", response.data)
       
-      const { pages, total_pages } = responseData
+      const { pages, total_pages } = response.data
       
       console.log("Step 6: Completing processing")
-      updateFileStatus({ 
+      updateFileStatus(fileId, { 
         status: 'completed', 
         result: pages,
         processingStatus: `Successfully processed ${total_pages} pages!`
@@ -125,18 +95,19 @@ export function FileUploader() {
 
     } catch (err) {
       console.error("Error in processFile:", err)
-      updateFileStatus({ 
+      const errorMessage = axios.isAxiosError(err) 
+        ? `OCR processing failed: ${err.response?.status} ${err.response?.statusText || err.message}`
+        : err instanceof Error ? err.message : "An unknown error occurred"
+      
+      updateFileStatus(fileId, { 
         status: 'error', 
-        error: err instanceof Error ? err.message : "An unknown error occurred"
+        error: errorMessage
       })
     }
   }
 
-  const removeFile = (fileId: string) => {
-    setFiles(prev => prev.filter(f => f.id !== fileId))
-    if (selectedFileId === fileId) {
-      setSelectedFileId(null)
-    }
+  const handleViewResults = (fileId: string) => {
+    router.push(`/results/${fileId}`)
   }
 
   const getStatusIcon = (status: FileItem['status']) => {
@@ -151,8 +122,6 @@ export function FileUploader() {
         return <XCircle className="h-4 w-4 text-red-500" />
     }
   }
-
-  const selectedFile = files.find(f => f.id === selectedFileId)
 
   return (
     <div className="space-y-6">
@@ -220,10 +189,7 @@ export function FileUploader() {
               {files.map((fileItem) => (
                 <div
                   key={fileItem.id}
-                  className={cn(
-                    "p-4 border rounded-lg transition-colors",
-                    selectedFileId === fileItem.id ? "border-primary bg-muted/50" : "border-muted-foreground/20"
-                  )}
+                  className="p-4 border rounded-lg transition-colors border-muted-foreground/20"
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-3 flex-1">
@@ -244,7 +210,7 @@ export function FileUploader() {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => setSelectedFileId(fileItem.id)}
+                          onClick={() => handleViewResults(fileItem.id)}
                         >
                           <Eye className="h-4 w-4 mr-1" />
                           View
@@ -282,39 +248,6 @@ export function FileUploader() {
             </div>
           </CardContent>
         </Card>
-      )}
-
-      {/* Results Display */}
-      {selectedFile && selectedFile.status === 'completed' && selectedFile.result && (
-        <div className="space-y-4">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-2">
-              <CheckCircle className="h-5 w-5 text-green-500" />
-              <h2 className="text-xl font-semibold">
-                {selectedFile.file.name} - {selectedFile.result.length} pages
-              </h2>
-            </div>
-            <Button variant="outline" onClick={() => setSelectedFileId(null)}>
-              Close
-            </Button>
-          </div>
-          
-          <div className="space-y-4">
-            {selectedFile.result.map((pageResult) => (
-              <Card key={pageResult.page}>
-                <CardHeader className="pb-3">
-                  <CardTitle className="flex items-center gap-2 text-lg">
-                    <FileText className="h-4 w-4" />
-                    หน้า {pageResult.page}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <MarkdownDisplay markdown={pageResult.natural_text.replace(/\\n/g, '\n')} />
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
       )}
     </div>
   )

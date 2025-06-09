@@ -38,48 +38,73 @@ async function splitPdfPages(base64Data: string): Promise<string[]> {
 }
 
 // ฟังก์ชันยิง OCR API สำหรับหน้าเดียว
-async function processPageOcr(base64Page: string, pageNumber: number): Promise<PageOcrResponse> {
-  try {
-    const response = await axios.post(
-      process.env.NEXT_PUBLIC_OCR_API_URL as string,
-      {
-        base64_pdf: base64Page,
-      },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.OCR_API_KEY}`,
+async function processPageOcr(base64Page: string, pageNumber: number, maxRetries: number = 2): Promise<PageOcrResponse> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await axios.post(
+        process.env.NEXT_PUBLIC_OCR_API_URL as string,
+        {
+          base64_pdf: base64Page,
         },
-      }
-    );
- 
-    const raw = (response.data as string)
-    console.log(raw)
-
-    function extractText(jsonString: string) {
-      const start = '{"natural_text": "';
-      const end = '"}';
-      const cleaned = jsonString
-      
-      if (cleaned.startsWith(start)) {
-        const lastEnd = cleaned.lastIndexOf(end);
-        if (lastEnd !== -1) {
-          return cleaned.substring(start.length, lastEnd);
+        {
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${process.env.OCR_API_KEY}`,
+          },
         }
-      }
-      return null;
-    }
+      );
+   
+      const raw = (response.data as string)
 
-    return {
-      page: pageNumber + 1, // เริ่มนับจาก 1
-      natural_text: extractText(raw)!
-    };
-  } catch (error) {
-    if (axios.isAxiosError(error)) {
-      throw new Error(`OCR API failed for page ${pageNumber}: ${error.response?.statusText || error.message}`);
+      function extractText(jsonString: string) {
+        const start = '{"natural_text": "';
+        const end = '"}';
+        const cleaned = jsonString
+        
+        if (cleaned.startsWith(start)) {
+          const lastEnd = cleaned.lastIndexOf(end);
+          if (lastEnd !== -1) {
+            return cleaned.substring(start.length, lastEnd);
+          }
+        }
+        return null;
+      }
+
+      const extractedText = extractText(raw);
+      
+      // เช็คว่าได้ natural_text หรือไม่
+      if (extractedText === null || extractedText.trim() === '') {
+        throw new Error('Natural text not found or empty in OCR response');
+      }
+
+      return {
+        page: pageNumber + 1, // เริ่มนับจาก 1
+        natural_text: extractedText
+      };
+      
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error('Unknown error');
+      
+      // ถ้ายังไม่ถึงครั้งสุดท้าย ให้ลอง retry อีกครั้ง
+      if (attempt < maxRetries) {
+        console.log(`OCR attempt ${attempt + 1} failed for page ${pageNumber + 1}, retrying... (${lastError.message})`);
+        // รอ 1 วินาทีก่อน retry
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
+      
+      // ถ้า retry ครบแล้วยังไม่ได้ ให้ throw error
+      if (axios.isAxiosError(lastError)) {
+        throw new Error(`OCR API failed for page ${pageNumber + 1} after ${maxRetries + 1} attempts: ${lastError.response?.statusText || lastError.message}`);
+      }
+      throw new Error(`OCR API failed for page ${pageNumber + 1} after ${maxRetries + 1} attempts: ${lastError.message}`);
     }
-    throw new Error(`OCR API failed for page ${pageNumber}: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
+  
+  // ไม่ควรมาถึงจุดนี้ แต่เพื่อความปลอดภัย
+  throw new Error(`OCR processing failed for page ${pageNumber + 1} after all attempts`);
 }
 
 export async function POST(request: NextRequest) {
@@ -93,6 +118,7 @@ export async function POST(request: NextRequest) {
     console.log(`PDF split into ${pages.length} pages`);
 
     // วนลูปยิง OCR API ทีละหน้า (Sequential Processing)
+    // จะค่อยๆcallทีละหน้า เพื่อป้องกันการcallมากเกินไป แต่ถ้าอยากได้พร้อมกันสามารถไปเปิดใช้ code ด้านล่างแบบ Parallel Processing ได้
     console.log("Processing OCR for all pages sequentially...");
     const results: PageOcrResponse[] = [];
     
@@ -112,7 +138,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Parallel Processing (คอมเมนต์ไว้)
+    // Parallel Processing
     // const ocrPromises = pages.map((pageBase64, index) => 
     //   processPageOcr(pageBase64, index)
     // );
