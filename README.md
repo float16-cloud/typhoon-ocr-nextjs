@@ -7,7 +7,6 @@ A modern web application built with Next.js that provides OCR capabilities power
 - 🖼️ **File Upload**: Drag & drop interface for images and PDF files
 - 🔍 **OCR Processing**: Extract text from images using Typhoon-7B OCR model
 - 📄 **PDF Support**: Process PDF documents with multiple pages
-- 📱 **Responsive Design**: Mobile-friendly interface with modern UI
 - ⚡ **Fast Processing**: Serverless GPU-powered backend via Float16
 
 ## Tech Stack
