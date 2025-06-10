@@ -113,7 +113,7 @@ export default function ResultsPage() {
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-lg">
                 <FileText className="h-4 w-4" />
-                หน้า {pageResult.page}
+                Page {pageResult.page}
               </CardTitle>
             </CardHeader>
             <CardContent>
